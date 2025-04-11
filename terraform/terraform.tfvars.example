@@ -1,0 +1,52 @@
+# Azure region to deploy resources
+location = "eastus"
+
+# Resource Names
+resource_group_name = "rg-ray-logs-demo"
+virtual_network_name = "vnet-ray-logs-demo"
+subnet_name = "snet-ray-logs-demo"
+aks_cluster_name = "aks-ray-logs-demo"
+log_analytics_workspace_name = "law-ray-logs-demo"
+managed_identity_name = "id-ray-logs-demo"
+
+# Configuration Variables
+kubernetes_version = "1.28.3"
+law_retention_in_days = 30
+law_sku = "PerGB2018"
+container_insights_publisher = "Microsoft"
+container_insights_product = "OMSGallery/ContainerInsights"
+
+# Tags
+tags = {
+  Environment = "Demo"
+  Project     = "Ray-Logs"
+  ManagedBy   = "Terraform"
+}
+
+# Default Node Pool Variables
+default_node_pool_name = "default"
+default_node_pool_node_count = 1
+default_node_pool_vm_size = "Standard_D2s_v3"
+default_node_pool_enable_auto_scaling = false
+default_node_pool_min_count = 1
+default_node_pool_max_count = 3
+default_node_pool_max_pods = 30
+default_node_pool_os_disk_size_gb = 50
+
+# Virtual Network Configuration
+virtual_network_address_space = "10.0.0.0/16"
+node_cidr = "10.0.1.0/24"
+service_cidr = "10.0.2.0/24"
+dns_service_ip = "10.0.2.10"
+
+# Container Insights Settings
+container_insights_interval = "1m"
+container_insights_namespace_filtering_mode = "Include"
+container_insights_namespaces = ["ray-logs"]
+container_insights_enable_container_log_v2 = true
+
+# AKS Identity Settings
+aks_identity_type = "UserAssigned"
+
+# DCR Settings
+dcr_destination_name = "LogAnalytics" 

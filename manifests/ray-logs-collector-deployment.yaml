@@ -1,0 +1,305 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ray-logs-collector
+  namespace: ray-logs
+  labels:
+    app: ray-logs-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ray-logs-collector
+  template:
+    metadata:
+      labels:
+        app: ray-logs-collector
+    spec:
+      containers:
+      - name: fluentd
+        image: fluent/fluentd:v1.16-1
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: LAW_CUSTOMER_ID
+          valueFrom:
+            secretKeyRef:
+              name: law-credentials
+              key: customer-id
+        - name: LAW_SHARED_KEY
+          valueFrom:
+            secretKeyRef:
+              name: law-credentials
+              key: shared-key
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          cat > /fluentd/etc/fluent.conf << 'EOL'
+          # Fluentd configuration for Ray log collection
+
+          # Input plugin for Ray session logs
+          <source>
+            @type tail
+            path /tmp/ray/session_*/logs/*.log
+            pos_file /var/log/fluentd-ray.log.pos
+            tag ray.logs
+            read_from_head true
+            <parse>
+              @type json
+              time_key timestamp
+              time_format %Y-%m-%dT%H:%M:%S.%NZ
+            </parse>
+          </source>
+
+          # Add basic metadata
+          <filter ray.logs>
+            @type record_transformer
+            <record>
+              hostname ${hostname}
+              timestamp ${time}
+            </record>
+          </filter>
+
+          # Output to Azure Log Analytics
+          <match ray.logs>
+            @type azureloganalytics
+            customer_id ${LAW_CUSTOMER_ID}
+            shared_key ${LAW_SHARED_KEY}
+            log_type RayLogs
+            <buffer>
+              @type memory
+              flush_interval 5s
+              retry_wait 1s
+              retry_max_times 5
+            </buffer>
+          </match>
+          EOL
+
+          # Start Fluentd
+          exec fluentd -c /fluentd/etc/fluent.conf
+        volumeMounts:
+        - name: ray-logs
+          mountPath: /tmp/ray
+        - name: fluentd-config
+          mountPath: /fluentd/etc
+        - name: fluentd-pos
+          mountPath: /var/log
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
+      volumes:
+      - name: ray-logs
+        emptyDir: {}
+      - name: fluentd-config
+        emptyDir: {}
+      - name: fluentd-pos
+        emptyDir: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ray-logs-scripts
+  namespace: ray-logs
+data:
+  generate_logs.py: |
+    #!/usr/bin/env python3
+    import json
+    import random
+    import time
+    import os
+    import logging
+    from datetime import datetime, timedelta
+    import uuid
+    import sys
+
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    # Ray session information
+    SESSION_ID = str(uuid.uuid4())
+    RAY_SESSION_DIR = f"/tmp/ray/session_{SESSION_ID}"
+    LOG_DIR = f"{RAY_SESSION_DIR}/logs"
+
+    # Ensure log directory exists
+    os.makedirs(LOG_DIR, exist_ok=True)
+
+    # Component types and their log patterns
+    COMPONENTS = {
+        "ray.driver": {
+            "patterns": [
+                "Initializing Ray driver",
+                "Connecting to Ray cluster",
+                "Submitting task {task_id}",
+                "Task {task_id} completed successfully",
+                "Task {task_id} failed: {error}",
+                "Creating actor {actor_id}",
+                "Actor {actor_id} initialized",
+                "Actor {actor_id} method {method} called",
+                "Actor {actor_id} method {method} completed",
+                "Shutting down Ray driver"
+            ]
+        },
+        "ray.worker": {
+            "patterns": [
+                "Worker process started",
+                "Processing task {task_id}",
+                "Task {task_id} execution started",
+                "Task {task_id} execution completed",
+                "Task {task_id} failed with error: {error}",
+                "Worker process shutting down"
+            ]
+        },
+        "ray.actor": {
+            "patterns": [
+                "Actor {actor_id} created",
+                "Actor {actor_id} initialized with {num_cpus} CPUs",
+                "Actor {actor_id} method {method} execution started",
+                "Actor {actor_id} method {method} execution completed",
+                "Actor {actor_id} state updated",
+                "Actor {actor_id} checkpoint created",
+                "Actor {actor_id} checkpoint restored",
+                "Actor {actor_id} terminated"
+            ]
+        },
+        "ray.system": {
+            "patterns": [
+                "Node {node_id} status: {status}",
+                "Resource allocation: {resource_type}={amount}",
+                "Memory usage: {used_mb}MB / {total_mb}MB",
+                "CPU usage: {used_cores} / {total_cores} cores",
+                "GPU usage: {used_gpus} / {total_gpus} GPUs",
+                "Network bandwidth: {bandwidth} MB/s",
+                "Object store memory: {used_mb}MB / {total_mb}MB"
+            ]
+        }
+    }
+
+    # Error messages for task failures
+    ERROR_MESSAGES = [
+        "Timeout waiting for task completion",
+        "Memory allocation failed",
+        "Resource not available",
+        "Network connection error",
+        "Invalid input data",
+        "Runtime error in task execution"
+    ]
+
+    # Method names for actor logs
+    METHOD_NAMES = [
+        "process_data",
+        "update_state",
+        "compute_result",
+        "checkpoint_state",
+        "restore_state",
+        "shutdown"
+    ]
+
+    def main():
+        """Main function to generate logs continuously."""
+        logger.info(f"Starting log generation for Ray session {SESSION_ID}")
+        logger.info(f"Log directory: {LOG_DIR}")
+        
+        # Component weights to control frequency of different log types
+        component_weights = {
+            "ray.system": 0.4,    # System logs most frequent
+            "ray.worker": 0.3,    # Worker logs next
+            "ray.actor": 0.2,     # Actor logs less frequent
+            "ray.driver": 0.1     # Driver logs least frequent
+        }
+        
+        try:
+            while True:
+                # Generate 1-3 log entries per cycle
+                num_entries = random.randint(1, 3)
+                
+                for _ in range(num_entries):
+                    # Select component based on weights
+                    component = random.choices(
+                        list(component_weights.keys()),
+                        weights=list(component_weights.values())
+                    )[0]
+                    
+                    # Generate and write log entry
+                    log_entry = generate_log_entry(component)
+                    write_log_to_file(log_entry)
+                
+                # Sleep between 5-15 seconds between cycles
+                sleep_time = random.uniform(5, 15)
+                time.sleep(sleep_time)
+                
+        except KeyboardInterrupt:
+            logger.info("Log generation stopped by user")
+        except Exception as e:
+            logger.error(f"Error generating logs: {e}")
+            raise
+
+    def generate_log_entry(selected_component=None):
+        """Generate a single log entry with Ray-like structure."""
+        component = selected_component or random.choice(list(COMPONENTS.keys()))
+        pattern = random.choice(COMPONENTS[component]["patterns"])
+        
+        # Generate unique IDs
+        task_id = f"task_{uuid.uuid4().hex[:8]}"
+        actor_id = f"actor_{uuid.uuid4().hex[:8]}"
+        node_id = f"node_{random.randint(1, 5)}"
+        
+        # Fill in pattern placeholders
+        message = pattern.format(
+            task_id=task_id,
+            actor_id=actor_id,
+            node_id=node_id,
+            error=random.choice(ERROR_MESSAGES),
+            method=random.choice(METHOD_NAMES),
+            num_cpus=random.randint(1, 8),
+            status=random.choice(["healthy", "degraded", "unhealthy"]),
+            resource_type=random.choice(["CPU", "GPU", "memory"]),
+            amount=random.randint(1, 100),
+            used_mb=random.randint(100, 1000),
+            total_mb=random.randint(1000, 2000),
+            used_cores=random.randint(1, 8),
+            total_cores=8,
+            used_gpus=random.randint(0, 2),
+            total_gpus=2,
+            bandwidth=random.randint(10, 100)
+        )
+        
+        # Weight log levels
+        level = random.choices(
+            ["INFO", "WARNING", "ERROR"],
+            weights=[0.7, 0.2, 0.1]  # 70% INFO, 20% WARNING, 10% ERROR
+        )[0]
+        
+        # Generate log entry
+        log_entry = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "level": level,
+            "component": component,
+            "message": message,
+            "task_id": task_id if "task" in message else None,
+            "actor_id": actor_id if "actor" in message else None,
+            "node_id": node_id,
+            "session_id": SESSION_ID,
+            "log_file": f"{LOG_DIR}/{component.replace('.', '_')}.log"
+        }
+        
+        return log_entry
+
+    def write_log_to_file(log_entry):
+        """Write log entry to appropriate log file and stream."""
+        # Always write to file
+        log_file = log_entry["log_file"]
+        with open(log_file, "a") as f:
+            f.write(json.dumps(log_entry) + "\n")
+        
+        # Also write to appropriate stream
+        if log_entry["level"] == "ERROR":
+            print(json.dumps(log_entry), file=sys.stderr)
+        else:
+            print(json.dumps(log_entry), file=sys.stdout)
+
+    if __name__ == "__main__":
+        main() 
