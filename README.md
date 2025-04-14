@@ -186,3 +186,74 @@ The script will:
 After a successful deployment, you'll have several components running in your cluster. Here's what you should see:
 
 #### Ray Logs Components (namespace: ray-logs)
+```bash
+$ kubectl get pods -n ray-logs
+NAME                                  READY   STATUS    RESTARTS   AGE
+ray-logs-simulator-5d4f8b9c6-2qxvp   2/2     Running   0          10m
+```
+
+This pod contains two containers:
+1. `ray-logs-simulator`: Generates Ray-like logs
+2. `fluentd`: Collects and redirects logs to stdout/stderr
+
+#### Monitoring Components (namespace: kube-system)
+```bash
+$ kubectl get pods -n kube-system | grep -E 'ama|oms'
+ama-logs-l9c8f                    3/3     Running   1          10m
+ama-logs-rs-f46df69f7-szkqv       2/2     Running   0          10m
+```
+
+These pods handle log collection and forwarding to Azure Monitor.
+
+## Verifying Log Collection
+
+1. Check the Ray Log Simulator logs:
+   ```bash
+   kubectl logs -n ray-logs deployment/ray-logs-simulator -c ray-logs-simulator
+   ```
+
+2. Check the Fluentd collector logs:
+   ```bash
+   kubectl logs -n ray-logs deployment/ray-logs-simulator -c fluentd
+   ```
+
+3. Query logs in Azure Portal:
+   - Navigate to your Log Analytics workspace
+   - Use the following Kusto query to see the collected logs:
+   ```kusto
+   ContainerLogV2
+   | where Namespace == "ray-logs"
+   | where ContainerName == "ray-logs-simulator"
+   | project TimeGenerated, LogEntry, LogLevel
+   | order by TimeGenerated desc
+   ```
+
+## Cleanup
+
+To remove all resources created by this project:
+
+1. Delete the Kubernetes resources:
+   ```bash
+   kubectl delete namespace ray-logs
+   ```
+
+2. Run Terraform destroy:
+   ```bash
+   cd terraform
+   terraform destroy
+   ```
+
+## Additional Resources
+
+- [Ray Documentation](https://docs.ray.io/)
+- [Azure Container Insights Documentation](https://learn.microsoft.com/en-us/azure/azure-monitor/containers/container-insights-overview)
+- [Fluentd Documentation](https://docs.fluentd.org/)
+- [Azure Monitor Agent Documentation](https://learn.microsoft.com/en-us/azure/azure-monitor/agents/azure-monitor-agent-overview)
+- [Container Insights Agent Configuration](https://github.com/microsoft/Docker-Provider/blob/ci_prod/kubernetes/container-azm-ms-agentconfig.yaml) - Reference configuration for customizing log collection settings, including namespace filtering and log collection thresholds
+- [Container Insights Agent Settings Documentation](https://github.com/microsoft/Docker-Provider/blob/ci_prod/Documentation/AgentSettings/ReadMe.md) - Detailed documentation of all available agent settings
+- [Container Insights Log Query Documentation](https://learn.microsoft.com/en-us/azure/azure-monitor/containers/container-insights-log-query) - Guide for querying container logs in Log Analytics
+- [Container Insights High Scale Mode](https://aka.ms/cihsmode) - Documentation for high log volume scenarios
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
